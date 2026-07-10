@@ -9,6 +9,7 @@ from sklearn.metrics import roc_auc_score
 import numpy as np
 from train_gine import GINE, GraphDataset, process_single_data,  custom_collate, build_graph_from_single_data
 import pandas as pd
+from scipy.stats import pearsonr
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--use_edge_weight', type=bool, default=True)
@@ -176,12 +177,15 @@ def load_and_evaluate_gine(model_path, test_data_path, embedding_path, label_pat
     precision = precision_score(all_labels, predicted)
     recall = recall_score(all_labels, predicted)
     f1 = f1_score(all_labels, predicted)
+    pcc, _ = pearsonr(all_labels, all_preds)
     print(f"\nTest Results for threshold {thresh:.2f}:")
     print(f"Accuracy: {accuracy:.4f}")
     print(f"AUC-ROC: {auc:.4f}")
     print(f"Precision: {precision:.4f}")
     print(f"Recall: {recall:.4f}")
     print(f"F1: {f1:.4f}")
+    print(f"PCC: {pcc:.4f}")
+    print(f"AVG: {(accuracy+auc+pcc)/3.0:.4f}")
 
     print(f'AVG: {(accuracy+auc+f1)/3.0:.4f}')
     
@@ -196,6 +200,8 @@ def load_and_evaluate_gine(model_path, test_data_path, embedding_path, label_pat
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "f1_score": round(f1, 4),
+        "pcc": round(pcc, 4),
+        "avg": round((accuracy+auc+pcc)/3.0, 4)
     }
 
 if __name__ == '__main__':
