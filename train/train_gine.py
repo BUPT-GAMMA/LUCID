@@ -4,7 +4,7 @@ import torch
 from torch.nn import Module
 from torch_geometric.nn import GINEConv, global_add_pool
 from torch_geometric.data import Data, Batch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 import json
 import numpy as np
 from sklearn.metrics import roc_auc_score, roc_curve
@@ -26,7 +26,7 @@ class GINE(Module):
                 torch.nn.ReLU(),
                 torch.nn.Linear(hidden_channels, 256)
             ),
-            edge_dim=edge_dim 
+            edge_dim=edge_dim  
         ))
         
         for _ in range(num_layers - 1):
@@ -36,7 +36,7 @@ class GINE(Module):
                     torch.nn.ReLU(),
                     torch.nn.Linear(128, 64)
                 ),
-                edge_dim=edge_dim 
+                edge_dim=edge_dim  
             ))
             
         self.classifier = torch.nn.Linear(64, 1)
@@ -46,12 +46,14 @@ class GINE(Module):
             x = x.view(x.size(0), -1)
         if len(edge_attr.shape) == 3:
             edge_attr = edge_attr.view(edge_attr.size(0), -1)    
+        if args.use_edge_weight:
+            edge_attr = edge_attr * edge_sim.unsqueeze(-1)
         for conv in self.convs:
             x = conv(x, edge_index, edge_attr)
             x = torch.relu(x)
         x = torch.nn.functional.dropout(x, p=0.5, training=self.training)
         
-        graph_embeddings = global_add_pool(x, batch) 
+        graph_embeddings = global_add_pool(x, batch)  
         logits = self.classifier(graph_embeddings).squeeze(-1)
         return torch.sigmoid(logits)
         
@@ -110,7 +112,7 @@ def load_reasoning_chains_and_embeddings(jsonl_path, embedding_path, sim_path, l
     with open(label_path,'r')as f:
         for line in f:
             data=json.loads(line)
-            label_dict[data['ID']]=data['label']
+            label_dict[str(data['ID'])]=data['label']
 
     data_list = []
     embeddings_data = {}
@@ -118,10 +120,10 @@ def load_reasoning_chains_and_embeddings(jsonl_path, embedding_path, sim_path, l
         for line in f:
             data = json.loads(line.strip())
             if 'id' in data:
-                if data['id'] not in label_dict:
+                if str(data['id']) not in label_dict:
                     continue
-                embeddings_data[data['id']] = data
-                embeddings_data[data['id']]['label']=label_dict[data['id']]
+                embeddings_data[str(data['id'])] = data
+                embeddings_data[str(data['id'])]['label']=label_dict[str(data['id'])]
     
     sim_scores={}
     if sim_path:
@@ -131,13 +133,13 @@ def load_reasoning_chains_and_embeddings(jsonl_path, embedding_path, sim_path, l
                 scores = {}
                 for rel in data.get("similarity", []):
                     scores[rel["relation"]] = rel["score"]
-                sim_scores[data["id"]] = scores
+                sim_scores[str(data["id"])] = scores
     
     with open(jsonl_path, 'r') as f:
         for line in f:
             data = json.loads(line.strip())
             if 'reasoning_chains' in data and 'ID' in data :
-                data_id = data['ID']
+                data_id = str(data['ID'])
                 if sim_scores:
                     if data_id in embeddings_data and data_id in sim_scores:
                         data_list.append({
@@ -162,15 +164,24 @@ def build_graph_from_single_data(entity_embeddings, relation_embeddings, entity_
     
     kg_triple_set = []
     entity_set = set()
+    for chain in reasoning_chains:
+        for l in chain:
+            triple = [l[0], l[1], l[2]]
+            if triple not in kg_triple_set:
+                kg_triple_set.append(triple)
+                if l[0] in entity_ids:
+                    entity_set.add(l[0])
+                if l[2] in entity_ids:
+                    entity_set.add(l[2])
     
-    for l in reasoning_chains:
-        triple = [l[0], l[1], l[2]]
-        if triple not in kg_triple_set:
-            kg_triple_set.append(triple)
-            if l[0] in entity_ids:
-                entity_set.add(l[0])
-            if l[2] in entity_ids:
-                entity_set.add(l[2])
+    # for l in reasoning_chains:
+    #     triple = [l[0], l[1], l[2]]
+    #     if triple not in kg_triple_set:
+    #         kg_triple_set.append(triple)
+    #         if l[0] in entity_ids:
+    #             entity_set.add(l[0])
+    #         if l[2] in entity_ids:
+    #             entity_set.add(l[2])
 
     new_entity_ids = {entity: idx for idx, entity in enumerate(sorted(entity_set))}
     
@@ -195,7 +206,7 @@ def build_graph_from_single_data(entity_embeddings, relation_embeddings, entity_
             if sim_scores and relation in sim_scores:
                 edge_sim_scores.append(sim_scores[relation])
             else:
-                edge_sim_scores.append(0.0)
+                edge_sim_scores.append(1.0)
     
     if not edge_index or not node_embeddings:
         return None
@@ -225,7 +236,7 @@ def process_single_data(embeddings_data, tag, sim_scores=None):
         entity_ids[entity['content']] = current_entity_id
         entity_embeddings.append(torch.tensor(entity['matrix']))
         current_entity_id += 1
-
+        
     for relation in embeddings_data['relation_content']:
         relation_content = '('+relation['content'][0]+', '+relation['content'][1]+', '+relation['content'][2]+')'
         relation_ids[relation_content] = current_relation_id
@@ -421,11 +432,8 @@ def train_gin(jsonl_path):
                 'model_state_dict': best_model_state,
                 'optimizer_state_dict': optimizer.state_dict(),
                 'train_acc': best_acc,
-                # 'train_auc': best_auc,
-                # 'threshold': optimal_threshold,
             }, save_path)
-            
-        
+
         if accuracy > best_acc:
             best_acc = accuracy
             best_model_state = model.state_dict()
@@ -445,86 +453,9 @@ def train_gin(jsonl_path):
             
             print(f"***New Best Model - Train Loss: {avg_epoch_loss:.4f}, Train Accuracy: {accuracy:.4f}, Train AUC: {auc:.4f}***")
 
-    if args.use_edge_weight:      
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'train_acc': accuracy,
-        }, 'last_gine_model_3class_sim.pt')
-    else:
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'train_acc': accuracy,
-        }, 'last_gine_model_3class.pt')
-    
     model.load_state_dict(best_model_state)
     print(f"Training finished. Best training accuracy: {best_acc:.4f}")
     return model
-
-def evaluate(model, dataloader, device):
-    model.eval()
-    total = 0
-    correct = 0
-    all_probs = [] 
-    all_labels = []
-    
-    with torch.no_grad():
-        for batch_data in dataloader:
-            batch_graphs = []
-            batch_labels = []
-            
-            for data_item in batch_data:
-                if 'similarity' in data_item:
-                    sim_scores = data_item['similarity']
-                else:
-                    sim_scores = None
-                entity_embeddings, relation_embeddings, entity_ids, relation_ids, label = process_single_data(
-                    data_item['embeddings'],
-                    data_item['embeddings']['label'],
-                    sim_scores
-                )
-                
-                if entity_embeddings is None or relation_embeddings is None:
-                    continue
-
-                graph_data = build_graph_from_single_data(
-                    entity_embeddings,
-                    relation_embeddings,
-                    entity_ids,
-                    relation_ids,
-                    data_item['chains'],
-                    sim_scores
-                )
-                
-                if graph_data is not None:
-                    batch_graphs.append(graph_data)
-                    batch_labels.append(label)
-            
-            if not batch_graphs:
-                continue
-                
-            batched_graphs = Batch.from_data_list(batch_graphs).to(device)
-            batch_labels = torch.stack(batch_labels).to(device)
-            
-            pred = model(batched_graphs.x, batched_graphs.edge_index, batched_graphs.edge_attr, batched_graphs.batch)
-            all_probs.extend(pred.cpu().numpy())
-            all_labels.extend(batch_labels.cpu().numpy())
-    
-    try:
-        auc = roc_auc_score(all_labels, all_probs)
-    except ValueError:
-        auc = 0.5  
-    
-    from sklearn.metrics import roc_curve
-    fpr, tpr, thresholds = roc_curve(all_labels, all_probs)
-    optimal_threshold = get_threshold(thresholds, tpr, fpr)
-    predicted = (np.array(all_probs) > optimal_threshold).astype(float)
-    accuracy = np.mean(predicted == all_labels)
-    
-    return accuracy, auc, optimal_threshold
 
 if __name__ == '__main__':
     jsonl_path = ''

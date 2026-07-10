@@ -14,12 +14,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--use_edge_weight', type=bool, default=True)
 args = parser.parse_args()
 
-def get_threshold(thresholds, tpr, fpr):
-    gmean = np.sqrt(tpr * (1 - fpr))
-    index = np.argmax(gmean)
-    thresholdOpt = round(thresholds[index], ndigits = 4)
-    return thresholdOpt
-
 def load_and_evaluate_gine(model_path, test_data_path, embedding_path, label_path, sim_path=None):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -173,8 +167,6 @@ def load_and_evaluate_gine(model_path, test_data_path, embedding_path, label_pat
     
     from sklearn.metrics import roc_curve
     from sklearn.metrics import precision_score, recall_score, f1_score
-    fpr, tpr, thresholds = roc_curve(all_labels, all_preds)
-    thresh = get_threshold(thresholds, tpr, fpr)
     
     predicted = (np.array(all_preds) > thresh).astype(float)
         
