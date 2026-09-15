@@ -138,7 +138,7 @@ def load_and_evaluate_gine(model_path, test_data_path, embedding_path, label_pat
                     batch_labels.append(label)
                     data_id = data_item['embeddings'].get('id', 'unknown')
                     all_ids.append(data_id)
-                    batch_ids.append(data_id)  # 保存ID
+                    batch_ids.append(data_id)
             
             if not batch_graphs:
                 continue
