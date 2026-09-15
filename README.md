@@ -51,8 +51,6 @@ Run all commands from the repository root, `/path/to/LUCID`.
 
 ## 1. Create the environment
 
-Use Python 3. The code does not currently provide a `requirements.txt`, so install PyTorch according to your CUDA version first, then install the other dependencies:
-
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
